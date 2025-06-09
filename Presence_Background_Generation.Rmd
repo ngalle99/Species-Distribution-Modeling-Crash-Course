@@ -1,0 +1,307 @@
+---
+title: 'SDM Workshop: Presence and Background'
+output: html_document
+date: "2025-03-10"
+---
+
+## Summary
+
+This code was created by Nicholas A Galle (Rohr Lab, Dept. Biological Sciences, University of Notre Dame) to source and clean presence data, and to generate background (pseudo-absence) data for use in correlative SDM frameworks. Note: This code is written for pulling and cleaning points for one species, I have code written to do it in a loop for multiple species if you want code to do that.
+
+## Libraries
+
+First we'll need to load in our libraries. For this we will need 'rgbif' 'CoordinateCleaner' 'dplyr' and 'spThin'. If you do not have these installed, just remove the '#' in the code below and run the chunk. 
+```{r include=FALSE}
+#install.packages("rgbif")
+#install.packages("CoordinateCleaner")
+#install.packages("spThin)
+#install.packages("raster")
+#install.packages("ggplot2")
+#install.packages("rnaturalearth")
+#install.packages("rnaturalearthdata")
+#install.packages("ENMeval")
+library(rgbif)
+library(CoordinateCleaner)
+library(spThin)
+library(raster)
+library(ggplot2)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(ENMeval)
+```
+
+
+
+## Occurrence/Presence Data
+
+### Downloading GBIF Data
+
+Now lets source the occurrence data for the given species you are interested in modeling. Below is a chunk of code that will use rgbif::occ_search() to pull the occurrences from GBIF. Note: This function has A LOT of different arguments available, take a look if you want to do a more in-depth search off the bat. In this case, we are just pulling down raw occurrences. 
+```{r}
+# For ease, lets make our species name an object, below add yours
+spp <- "Chrysodeixis chalcites"
+# We will feed that into occ_search. Feel free to tweak the limit; however, it is generally the case that 50,000 is far more than enough.
+dat <- occ_search(scientificName = spp, # Linnean name of species
+                  limit = 50000, # Limit on the number of occurences pulled
+                  hasCoordinate = TRUE) # Does the record have lat/lon coordinates associated
+# This subsets it to the actual data with your occurrences, otherwise you also get metadata/search stuff (which you may want)
+dat <- dat$data 
+
+# This will further subset that to the named columns there. There are others associated with the search, take a look to see if there are any others you might want to have
+dat <- dat %>%
+  dplyr::select(species, decimalLongitude, decimalLatitude, countryCode,
+               gbifID, family, taxonRank, coordinateUncertaintyInMeters, 
+               year, institutionCode, datasetName)
+```
+
+Once you are happy with the records pulled and columns retained, save this as your raw search results. These are generally reported in papers when you are detailing the record cleaning process. 
+```{r}
+write.csv(dat, file=paste0(spp,"_occur_raw.csv"))
+```
+
+### Occurrence Record Cleaning
+
+The first best thing you can do is visualize your data, to see if there are any records that don't make sense geographically (terrestrial species in the ocean, tropical/endemic species in the arctic, occurrences on Antarctica, an occurrence very far away from known populations). 
+```{r}
+# Load world map data
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+# Create the map with points
+ggplot() +
+  geom_sf(data = world, fill = "lightgray", color = "black") +  # Plot world map
+  geom_point(data = dat, aes(x = decimalLongitude, y = decimalLatitude), 
+             color = "red", alpha = 0.6, size = 2) +  # Plot points
+  theme_minimal() + 
+  labs(title = paste0("Raw GBIF Points for ", spp),
+       x = "Longitude", y = "Latitude")
+```
+
+
+
+Now time for the data cleaning portion. We will use the CoordinateCleaner and countrycode package to run through some common issue tests
+```{r}
+library(countrycode)
+  dat$countryCode <-  countrycode(dat$countryCode, origin =  'iso2c',
+                                  destination = 'iso3c')
+  dat <- data.frame(dat)
+  #Using clean_coordinates, which uses a variety of empirical tests, we can flag 
+  # likely erroneous coordinates based off of a variety of tests
+  flags <- clean_coordinates(x = dat, lon = "decimalLongitude", lat = "decimalLatitude",
+                             countries = "countryCode", species = "species",
+                            # The following will flag 1) records at the exact coord of a captial
+                            # 2) Exact country centroids
+                            # 3) Lat/Lon that are exactly equal
+                            # 4) Coords with exact 0 for lon or lat
+                            # 5) Points in the sea
+                            # 6) Points associated with collection institutions
+                            # 7) Points associated with GBIF headquarters in Copenhagen
+                              tests = c("capitals", "centroids", "equal",
+                                       "zeros","seas", "institutions", "gbif"))
+  # This will give you a summary of the flagged points
+  summary(flags)
+  dat_cl <- dat[flags$.summary,]
+  #The flagged records
+  dat_fl <- dat[!flags$.summary,]
+  #Removing points from before 1980
+  table(dat_cl$year)
+  dat_cl <- dat_cl[dat_cl$year > 2000, ] # Change based on your question and data availability
+```
+
+Just in case, I think it would be best to save this cleaned up data
+```{r}
+write.csv(dat_cl, paste0(spp, "_clean_occur.csv"))
+```
+
+
+### Occurrence Record Thinning
+
+Okay, so we have the subset of cleaned points that we want to include. Now, for a range of reasons (match resolution between response and predictor variables, maximize nearest neighbor distance in our response, etc.) we will preferably want to thin our occurrence data. This is heavily dependent on how many occurrence records are available to you, the extent of your spp distribution, and the resolution of your available predictor data. There are two ways you could go about this; 1) You could just thin by some decimal place in your latitude and longitude (ex: round down to tenths place and remove duplicates), or 2) use an algorithm to thin out your data set. Below I will have some example code for both of them.
+
+1) Removing by rounding off to a decimal place (Note, this is code adapted from the SDM modeling group at Sam Houston State University, headed by Dr. Chris Randle [Eat 'em up Kats]). I find this approach to be useful when you have a metric ton of data.
+```{r}
+#5 decimals
+lon5<-as.numeric(dat_cl$decimalLongitude)
+lon5<-round(lon5, digits=5)
+lat5<-as.numeric(dat_cl$decimalLatitude)
+lat5<-round(lat5, digits=5)
+sdmdata5<-cbind(lon5, lat5)
+dups5 <-duplicated(sdmdata5[ ,c('lon5', 'lat5')])
+
+#4 decimals
+lon4<-as.numeric(dat_cl$decimalLongitude)
+lon4<-round(lon4, digits=4)
+lat4<-as.numeric(dat_cl$decimalLatitude)
+lat4<-round(lat4, digits=4)
+sdmdata4<-cbind(lon4, lat4)
+dups4 <-duplicated(sdmdata4[ ,c('lon4', 'lat4')])
+
+#3 decimals
+lon3<-as.numeric(dat_cl$decimalLongitude)
+lon3<-round(lon3, digits=3)
+lat3<-as.numeric(dat_cl$decimalLatitude)
+lat3<-round(lat3, digits=3)
+sdmdata3<-cbind(lon3, lat3)
+dups3 <-duplicated(sdmdata3[ ,c('lon3', 'lat3')])
+
+#2 decimals
+lon2<-as.numeric(dat_cl$decimalLongitude)
+lon2<-round(lon2, digits=2)
+lat2<-as.numeric(dat_cl$decimalLatitude)
+lat2<-round(lat2, digits=2)
+sdmdata2<-cbind(lon2, lat2)
+dups2 <-duplicated(sdmdata2[ ,c("lon2", "lat2")])
+
+#1 decimals
+lon1<-as.numeric(dat_cl$decimalLongitude)
+lon1<-round(lon1, digits=1)
+lat1<-as.numeric(dat_cl$decimalLatitude)
+lat1<-round(lat1, digits=1)
+sdmdata1<-cbind(lon1, lat1)
+dups1 <-duplicated(sdmdata1[ ,c("lon1", "lat1")])
+
+#0 decimals
+lon0<-as.numeric(dat_cl$decimalLongitude)
+lon0<-round(lon0, digits=0)
+lat0<-as.numeric(dat_cl$decimalLatitude)
+lat0<-round(lat0, digits=0)
+sdmdata0<-cbind(lon0, lat0)
+dups0 <-duplicated(sdmdata0[ ,c("lon0", "lat0")])
+
+#and lets print the results
+print(paste("If you remove duplicates at 5 decimals you will have", 
+               nrow(dat_cl)-sum(dups5)+1, "records left." ))
+print(paste("If you remove duplicates at 4 decimals you will have", 
+               nrow(dat_cl)-sum(dups4)+1, "records left." ))
+print(paste("If you remove duplicates at 3 decimals you will have", 
+               nrow(dat_cl)-sum(dups3)+1, "records left." ))
+print(paste("If you remove duplicates at 2 decimals you will have", 
+               nrow(dat_cl)-sum(dups2)+1, "records left." ))
+print(paste("If you remove duplicates at 1 decimals you will have", 
+               nrow(dat_cl)-sum(dups1)+1, "records left." ))
+print(paste("If you remove duplicates at the whole degree, you will have", 
+               nrow(dat_cl)-sum(dups0)+0, "records left." ))
+```
+Great! We have a fun little read out of how many records this would leave us. If one of these is sufficient and of use, swap out the number below.
+```{r}
+dat_th<-dat_cl[!dups5,]
+# After making sure you are comfortable with this, save it by un-commenting the write.csv()!
+# write.csv(dat_th, paste0(spp, "_thin1.csv"))
+```
+
+
+2) We can use the spThin package to thin points out to a given degree as well. Can take a while if you've got a ton of points
+```{r}
+thinned_dataset_full <-
+    thin( loc.data = dat_cl,
+          lat.col = "decimalLatitude", long.col = "decimalLongitude",
+          spec.col = "species",
+          thin.par = 1, reps = 100, #thin.par is in kilometers, reps = # of repeats
+          locs.thinned.list.return = TRUE,
+          write.files = TRUE, # THIS MAKES IT SAVE THE FILE, CHANGE IF YOU DON"T WANT THAT OR UPDATE FOLLOWING CODE to have write.files = FALSE and un-comment the write.csv below
+          max.files = 1,
+          out.dir="C:/Users/nickg/OneDrive/Documents/Old PC Backup/Notre Dame/Coding",# your directory
+          out.base = paste0(spp),
+          write.log.file = FALSE )
+```
+
+
+## Background data
+
+Alright, so background data is the way that we can sample the environmental variation in our study extent and for model evaluation. This used to be viewed as absence data (where a species is not), practice has come around to treat these as random samples (so occurrence prediction is evaluated against a random spatial sample). 
+
+Below I am going to address two ways that we can go about this, with relation to generating points in a buffer around occurrences. 
+
+### Through the use of MegaSDM
+This package is not on CRAN, so use the following to install from github
+```{r}
+devtools::install_github("brshipley/megaSDM", build_vignettes = TRUE)
+library(megaSDM)
+```
+
+Alright, now that we've got the package installed we can use it to 1) generate a buffer around points and 2) generate background points
+
+First we generate the buffer, we will need to load in 1) our occurrence records, and 2) a predictor variable raster to set the extent
+```{r}
+# NOTE: IF THE FOLLOWING GIVE YOU CONNECTION PROBLEMS JUST PASTE AND RUN IN CONSOLE
+occs <- read.csv(file=paste0(spp,"_thin1.csv")) 
+occs <- na.omit(occs)
+occs<-occs[,2:3]
+occs<-occs[,c(2,1)]
+colnames(occs) <- c("x","y")
+write.csv(occs, paste0(spp,"_thin2.csv"))
+
+# the below function is sometimes dumb and won't work in a chunk. If that is the case, try in the console
+envir <- rast("bio_01.tif")
+```
+Next, we can use the BackgroundBuffers function to generate buffers around our occurrence points
+```{r}
+megaSDM::BackgroundBuffers(occlist = paste0(spp,"_thin2.csv"), envdata = envir, 
+                  output =  "C:\\Users\\nickg\\OneDrive\\Documents\\Old PC Backup\\Notre Dame\\Coding\\Background Buffer", 
+                  # THIS NEEDS TO BE A WRITTEN OUT PATH TO WHERE YOU WANT TO SAVE THEM IN A UNIQUE DIRECTORY 
+                  buff_distance = NA # Default, 2*95% quantile of minimum distance between each points
+                  )
+```
+
+Great! If all went well, then we have some background buffers. Now we can generate background points within (or within and outside of) them.
+
+```{r}
+# Set the number of background points you want, depends by study but a good general one would be 10,000
+nbgs <- 10000
+# Now we have to set what we want our spatial weighting scheme to be. Below it has 0.5, meaning half of the points will be generate in the buffer and half will be generated outside of the buffer. A spatial weight = 1 indicates that points will only be generated inside the buffers, a spatial weight = 0 indicates that background points will just be generated randomly throughout the study extent (making the buffers absolutely meaningless) 
+
+BackgroundPoints(spplist=spp,
+                 envdata=envir,
+                 # Path for background points
+                 output="C:/Users/nickg/OneDrive/Documents/Old PC Backup/Notre Dame/Coding", 
+                 nbg=nbgs,
+                 spatial_weights=0.5,
+                 # Path for Buffer
+                 buffers=paste0("C:/Users/nickg/OneDrive/Documents/Old PC Backup/Notre Dame/Coding/Background Buffer/",spp,"_thin2.shp"), 
+                 method = "random") # There is also "Varela" which is an environmentally subsampled way, look into Varela et al. 2014 if interested
+
+
+```
+
+
+
+
+
+
+### Training and Testing Partition
+Alright, so we've got to separate our data into training and testing data sets. If we did this in a random manner, we would not necessarily be evaluating our fit model against points independent spatially. A way to combat this is either through block or checkerboard partitioning, which we can do through the ENMeval package.
+
+```{r}
+setwd("C:/Users/nickg/OneDrive/Documents/Old PC Backup/Notre Dame/Coding")
+ species<- read.csv(file=paste0(spp,"_thin2.csv"))
+  species <- species[,c(2:3)]
+  # The above function generated points with the name in Genus_epithet rather than Genus epithet, so write out your species again with the form 'Genus_species'
+  spp1 <- "Chrysodeixis_chalcites"
+  bg_points <- read.csv(file=paste0(spp1,"_background.csv"))
+  bg_points <- bg_points[,c(2:3)]
+  # Aggregation factors is how groups are made in cell x cell form. So here, each grouping is a 30x30
+  groups<- get.checkerboard2(occ=species, envs=envir, bg=bg_points, aggregation.factor=30, gridSampleN = 10000)
+  occ_part <- groups[1]
+  bgs_part <- groups[2]
+  species_part<- cbind(species,occ_part)
+  spp_train1<- species_part[species_part$occs.grp==1,]
+  spp_train2<- species_part[species_part$occs.grp==2,]
+  spp_train3<- species_part[species_part$occs.grp==3,]
+  spp_train <- rbind(spp_train1, spp_train2, spp_train3)
+  spp_test <- species_part[species_part$occs.grp==4,]
+  back_part<- cbind(bg_points, bgs_part)
+  back_train1<-back_part[back_part$bg.grp==1,]
+  back_train2<-back_part[back_part$bg.grp==2,]
+  back_train3<-back_part[back_part$bg.grp==3,]
+  back_train<-rbind(back_train1,back_train2,back_train3)
+  back_test<-back_part[back_part$bg.grp==4,]
+  write.csv(spp_train, file=paste0(spp,"_presence_train.csv"))
+  write.csv(spp_test, file=paste0(spp,"_presence_test.csv"))
+  write.csv(back_train, file=paste0(spp,"_background_train.csv"))
+  write.csv(back_test, file=paste0(spp,"_background_test.csv"))
+```
+
+You now have generated some cleaned presence data and background points, along with their partitions! Feel free to adapt this in any way you need (cross-validation, looping for multiple species, etc.), and let me know if you need any help!
+
+
+
+
