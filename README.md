@@ -3,4 +3,4 @@ This is a repository of talks and workshops I generated to introduce fellow PhD 
 
 The currently included presentations are as follows: 1) Species Distribution Modeling: Overview, Assumptions, & Violations, 2) Occurrence Point Cleaning & Background Point Generation, 3) Considerations When Selecting Predictor Data, 4) An Overview of Common SDM Algorithms. The only code currently included is an RMD walkthrough for generating presence and background points, and partitioning them into training and testing sets. 
 
-Future works may be published here regarding SDM evaluation, as well as more annotated R code. As I do not update my GitHub as regularly as I should, please reach out to me at ngalle@nd.edu or nickgalle99@gmail.com if you have any questions regarding this material. 
+Future works may be published here regarding SDM evaluation, as well as more annotated R code. Please reach out to me at ngalle@nd.edu or nickgalle99@gmail.com if you have any questions regarding this material. 
