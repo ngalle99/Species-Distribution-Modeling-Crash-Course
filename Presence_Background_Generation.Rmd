@@ -222,11 +222,11 @@ Alright, now that we've got the package installed we can use it to 1) generate a
 
 First we generate the buffer, we will need to load in 1) our occurrence records, and 2) a predictor variable raster to set the extent
 ```{r}
-# NOTE: IF THE FOLLOWING GIVE YOU CONNECTION PROBLEMS JUST PASTE AND RUN IN CONSOLE
+# NOTE: If your lat and long columns are messed up somehow (happened with some in this work shop, uncomment below code to fix and rewrite)
 occs <- read.csv(file=paste0(spp,"_thin1.csv")) 
 occs <- na.omit(occs)
-occs<-occs[,2:3]
-occs<-occs[,c(2,1)]
+#occs<-occs[,2:3]
+#occs<-occs[,c(2,1)]
 colnames(occs) <- c("x","y")
 write.csv(occs, paste0(spp,"_thin2.csv"))
 
